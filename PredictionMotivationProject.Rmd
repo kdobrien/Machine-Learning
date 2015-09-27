@@ -1,0 +1,143 @@
+---
+title: "Prediction Motivation Project"
+author: "Kelly O’Brien"
+date: "September 26, 2015"
+output: html_document
+---
+
+This project will analyze the Weight Lifting Exercise Dataset to find a machine learning algorithm to
+predict whether a given person is performing an exercise correctly.  Information about the data set can be
+found at [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har). 
+
+```{r include=FALSE, cache=FALSE}
+# Load the necessary libraries
+library(ggplot2);library(caret);library(randomForest)
+```
+
+##Load and Clean Data
+
+The first step in the process is to read the comma separated varable (csv) data from the supplied data files.
+An inspection of the file contents using a text editor shows that there are a number of problems
+with missing data and also invalid data which is marked with the string *#DIV/0!* rather than the
+traditional *NA*.
+
+We will avoid loading strings as factors and assign both *NA* and *#DIV/0!* as missing values while loading the
+data.  Note that the data files must be in the current directory for the load.
+
+```{r}
+#setwd("/Users/kobrien/DataScientist/MachineLearning")
+trainingIn <- read.csv(file="pml-training.csv",head=TRUE,sep=",",na.strings = c("NA","#DIV/0!"),stringsAsFactors=FALSE)
+# Convert the classe classification variable back to a factor for the model
+trainingIn$classe = as.factor(trainingIn$classe) # Fix this, it needs to be a factor
+
+# This data will be used as the final validation of the model.  It does not have the classe column
+finalTestingIn <- read.csv(file="pml-testing.csv",head=TRUE,sep=",",na.strings = c("NA","#DIV/0!"),stringsAsFactors=FALSE)
+```
+
+There are a number of features that relate only to the collection of the training data (*unrelatedCols* below).
+Examples incude the person's name that generated the training data and the date and time when the training data
+was colected.  These kinds of features are not applicable for prediction.
+
+There are also a number of features (columns) that are missing most of their values (*naCols* below).  We will
+discard any feature that is missing at least half of its data.
+
+The cleaned data is placed into the training and finalTesting variables.
+
+```{r}
+# Filter out unrelated information that we don't want to include
+unrelatedCols = c("X","user_name","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp","new_window","num_window")
+
+# Get rid of any feature that has at least half of the values missing
+naCols = names(trainingIn)[which(colSums(is.na(trainingIn)) > dim(trainingIn)[1] / 2)]
+
+# Now get just the columns that are not part of the unrelatedCols or the naCols
+goodFeatures = names(trainingIn)[which(!names(trainingIn) %in% append(unrelatedCols,naCols))]
+training = trainingIn[,goodFeatures]
+
+# We must perform the same operations on the final testing data
+goodFeatures = names(finalTestingIn)[which(!names(finalTestingIn) %in% append(unrelatedCols,naCols))]
+finalTesting = finalTestingIn[,goodFeatures]
+```
+
+We are left with `r dim(training)[2]` columns of the original `r dim(trainingIn)[2]` columns
+which is a considerable reduction in complexity.
+
+##Data Exploration
+
+The next step is to determine which of the remaining features should be used as predictors.  We can check
+for which features (predictors) are correlated using the cor function.
+
+A correlation between .85 and 1.0 (not including 1.0) gives us the highly correlated predictors.
+The output below shows that there are several features that are strongly correlated which means 
+the correlated features are providing redundant information.
+
+```{r}
+# Get the pred(ictor) cor(relations)
+predcor <- cor(training[, -53])
+# This will show how many correlations are between .85 and 1 as well as between -.85 and -1
+predcor[abs(predcor) > .85 & abs(predcor) < 1.0]
+```
+
+Reading through the output of *print(predcor)*, it appears that the feature *roll_belt* shows a
+strong correlation with several items.  The *roll_belt* item is not required since 
+it brings no information that is not supplied by the correlated items.
+
+```{r}
+#head(1,predcor)
+predcor["roll_belt","yaw_belt"]
+predcor["roll_belt","total_accel_belt"]
+predcor["roll_belt","accel_belt_y"]
+predcor["roll_belt","accel_belt_z"]
+predcor["roll_belt","accel_belt_z"]
+```
+
+Similarly, the *total_accel_belt* has a high correlation with the *accel_belt_y* and *accel_belt_z*.  Neither
+the *accel_belt_y* or *accel_belt_z* have strong correlations with any other remaining features.
+
+```{r}
+predcor["total_accel_belt","accel_belt_y"]
+predcor["total_accel_belt","accel_belt_z"]
+```
+
+We'll delete the *roll_belt* and *total_accel_belt* features from the data sets.  
+
+```{r}
+goodFeatures <- names(training)[which(!names(training) %in% c("total_accel_belt","roll_belt"))]
+training <- training[,goodFeatures]
+
+goodFeatures <- names(finalTesting)[which(!names(finalTesting) %in% c("total_accel_belt","roll_belt"))]
+finalTesting <- finalTesting[,goodFeatures]
+```
+
+##Training
+
+One of the most accurate algorithms is the random forest.  Unfortunately, using the caret
+train method with random forest is too slow to be practical since it will attempting to determine the
+best tuning parameters by refitting the model multiple times.
+
+Instead, we'll use the *randomForest* method directly which will give us a straightforward implementation
+without the extra tuning.  It completes in a fraction of the time that the caret train method requires.
+
+```{r}
+# Create the model
+modelFit <- randomForest(classe ~ ., data = training, ntree = 2048)
+# Show the results (including the out of sample error)
+print(modelFit)
+```
+
+
+##Model Results
+
+As can be seen above, the random forest algorithm produces an *out of bag (OOB)* error estimate
+of **0.31%** which is very good predicted performance.  No further tuning is necessary and the
+selected algorithm is more than adequate for our purposes.
+
+Note that the out of bag error is equivalent to the use of cross validation estimation and this is the
+estimate of error for the model.
+
+This is quite an accurate model although it does take quite a while to generate the model with 
+the randomForest method.
+
+The final test data can be processed using *predict(modelFit,finalTesting)*.  The results of the
+final prediction had an actual error rate of 0% (20/20 correct).
+
